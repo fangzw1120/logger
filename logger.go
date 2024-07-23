@@ -1,6 +1,8 @@
 //go:build linux || darwin || windows
 // +build linux darwin windows
 
+// Package logger provides basic functions.
+// @Description:
 package logger
 
 import (
@@ -10,8 +12,6 @@ import (
 	"io"
 	"os"
 	"path"
-	"runtime"
-	"strconv"
 	"syscall"
 	"time"
 )
@@ -19,38 +19,18 @@ import (
 var (
 	logger      *Logger
 	stateLogger *Logger
+	params      *Params
+	stateParams *Params
 )
 
 const (
+	// SigDebug ...
 	SigDebug = syscall.Signal(0x35)
-	SigInfo  = syscall.Signal(0x36)
+	// SigInfo ...
+	SigInfo = syscall.Signal(0x36)
+	// SigError ...
 	SigError = syscall.Signal(0x37)
 )
-
-var (
-	MaxAgeDay    = 30
-	MaxSizeMB    = 50
-	MaxBackupCnt = 0
-)
-
-func GetMaxAgeDay() int {
-	return MaxAgeDay
-}
-func SetMaxAgeDay(v int) {
-	MaxAgeDay = v
-}
-func GetMaxSizeMB() int {
-	return MaxSizeMB
-}
-func SetMaxSizeMB(v int) {
-	MaxSizeMB = v
-}
-func GetMaxBackupCnt() int {
-	return MaxBackupCnt
-}
-func SetMaxBackupCnt(v int) {
-	MaxBackupCnt = v
-}
 
 // Config ...
 type Config struct {
@@ -66,11 +46,15 @@ type Config struct {
 	IfSimpleLog           bool
 }
 
-// Init ...
-func Init(directory, fileName string, ifDebug bool, ifSimpleLog bool, ifVerbose bool) {
+// Init default 30day, 50MB/file, params to set removePathPrefix
+func Init(directory, fileName string, ifDebug bool, ifSimpleLog bool, ifVerbose bool, args ...Params) {
+	params = &Params{}
+	if len(args) > 0 {
+		params = &args[0]
+	}
 	logger = Configure(Config{
 		ConsoleLoggingEnabled: ifVerbose,
-		EncodeLogsAsJSON:      false,
+		EncodeLogsAsJSON:      true,
 		// supervisor会重定向标准输出到文件，可以不需要再次输出文件日志
 		FileLoggingEnabled: true,
 		Directory:          directory,
@@ -81,40 +65,15 @@ func Init(directory, fileName string, ifDebug bool, ifSimpleLog bool, ifVerbose 
 		MaxBackups:         MaxBackupCnt,
 		MaxAge:             MaxAgeDay,
 	})
-
-	logFile := &lumberjack.Logger{
-		Filename:   fileName, // 日志文件名
-		MaxSize:    50,       // 每个日志文件的最大尺寸，单位 MB
-		MaxAge:     7,        // 保留日志文件的最大天数
-		MaxBackups: 10,       // 保留日志文件的最大个数
-		LocalTime:  true,     // 使用本地时间
-		Compress:   true,     // 是否压缩旧日志文件
-	}
-	// 设置 zerolog 的全局日志级别为 debug
-	zerolog.SetGlobalLevel(zerolog.DebugLevel)
-	// 创建一个 io.Writer 对象用于同时输出到控制台和日志文件
-	multiWriter := io.MultiWriter(os.Stdout, logFile)
-
-	// 创建一个自定义的 zerolog.Formatter 对象
-	formatter := func() *zerolog.ConsoleWriter {
-		return &zerolog.ConsoleWriter{
-			TimeFormat: time.RFC3339, // 时间格式
-			NoColor:    true,         // 禁用控制台颜色
-			Out:        multiWriter,  // 输出目标为 multiWriter
-		}
-	}
-
-	// 将日志输出格式设置为自定义的格式
-	c := log.Output(formatter())
-	logger.Logger = &c
-	// 输出一条测试日志
-	logger.Debug("this is a test log message")
-	// 关闭日志文件
-	//logFile.Close()
+	logger.removePrefix = params.RemovePathPrefix
 }
 
 // InitStateLogger ...
-func InitStateLogger(directory, fileName string, ifDebug bool, ifSimpleLog bool, ifVerbose bool) {
+func InitStateLogger(directory, fileName string, ifDebug bool, ifSimpleLog bool, ifVerbose bool, args ...Params) {
+	stateParams = &Params{}
+	if len(args) > 0 {
+		stateParams = &args[0]
+	}
 	stateLogger = Configure(Config{
 		ConsoleLoggingEnabled: false,
 		EncodeLogsAsJSON:      true,
@@ -128,6 +87,7 @@ func InitStateLogger(directory, fileName string, ifDebug bool, ifSimpleLog bool,
 		MaxBackups:         MaxBackupCnt,
 		MaxAge:             MaxAgeDay,
 	})
+	stateLogger.removePrefix = stateParams.RemovePathPrefix
 }
 
 // Configure ...
@@ -186,70 +146,8 @@ func newRollingFile(config Config) io.Writer {
 		MaxSize:    MaxSizeMB,
 		MaxAge:     MaxAgeDay,
 		MaxBackups: MaxBackupCnt,
+		Compress:   true,
 	}
-}
-
-// Logger ...
-type Logger struct {
-	Logger *zerolog.Logger
-}
-
-// Debug ...
-func (l *Logger) Debug(msg string) {
-	l.Logger.Debug().Msg(msg)
-}
-
-// Debugf ...
-func (l *Logger) Debugf(format string, v ...interface{}) {
-	l.Logger.Debug().Msgf(format, v...)
-}
-
-// Info ...
-func (l *Logger) Info(msg string) {
-	l.Logger.Info().Msg(msg)
-}
-
-// Infof ...
-func (l *Logger) Infof(format string, v ...interface{}) {
-	l.Logger.Info().Msgf(format, v...)
-}
-
-// Warn ...
-func (l *Logger) Warn(msg string) {
-	l.Logger.Warn().Msgf(msg)
-}
-
-// Warnf ...
-func (l *Logger) Warnf(format string, v ...interface{}) {
-	l.Logger.Warn().Msgf(format, v...)
-}
-
-// Error ...
-func (l *Logger) Error(msg string) {
-	l.Logger.Error().Msg(msg)
-}
-
-// Errorf ...
-func (l *Logger) Errorf(format string, v ...interface{}) {
-	l.Logger.Error().Msgf(format, v...)
-}
-
-// Fatal ...
-func (l *Logger) Fatal(msg string) {
-	l.Logger.Fatal().Msg(msg)
-}
-
-// Fatalf ...
-func (l *Logger) Fatalf(format string, v ...interface{}) {
-	l.Logger.Fatal().Msgf(format, v...)
-}
-
-// StringerFunc ...
-type StringerFunc func() string
-
-// String ...
-func (f StringerFunc) String() string {
-	return f()
 }
 
 // Debug ...
@@ -310,18 +208,6 @@ func Fatal(msg string) {
 func Fatalf(format string, v ...interface{}) {
 	format = FILE() + ":" + LINE() + " " + format
 	logger.Fatalf(format, v...)
-}
-
-// FILE ...
-func FILE() string {
-	_, file, _, _ := runtime.Caller(2)
-	return file
-}
-
-// LINE ...
-func LINE() string {
-	_, _, line, _ := runtime.Caller(2)
-	return strconv.Itoa(line)
 }
 
 // CheckErr ...
